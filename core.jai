@@ -3,9 +3,11 @@ MAX_SPOT_LIGHTS :: 16;
 SHADOW_MAP_SIZE :: 2048;
 BLENDER_GLTF_WATTS_TO_LUMENS :: 683.0;
 
+// this is a point light, maybe call it that then?
 Light :: struct {
     position: Vector3;
     color: Vector3;
+    range: float; // the maximum distance this light can affect something
 }
 
 Spot_Light :: struct {
@@ -50,7 +52,7 @@ Directional_Shadow_Map :: struct {
     initialized := false;
 }
 
-// the main thing.
+// the main thing
 PBR_Packed_Texture_Rendering :: struct {
     renderer: Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderer;
     opaque_renderables: [..] Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable;
@@ -68,6 +70,8 @@ PBR_Packed_Texture_Rendering :: struct {
 
     reflection_cubemap: Cubemap;
     has_reflection_cubemap := false;
+    ambient_strength: float32 = 0.03;
+    world_background_color := Vector3.{0.05, 0.05, 0.08};
 
     directional_light: Directional_Light;
     shadow_map: Directional_Shadow_Map;
@@ -82,8 +86,19 @@ Transparent_PBR_Renderable :: struct {
     sort_position: Vector3;
 }
 
+PBR_Model_Renderable :: struct {
+    is_transparent: bool;
+    index: int;
+    local_to_model: Matrix4;
+    local_center: Vector3;
+}
+
+PBR_Model_Instance :: struct {
+    renderables: [..] PBR_Model_Renderable;
+}
+
 init :: (using ptr: *PBR_Packed_Texture_Rendering, cubemap_for_reflection: Cubemap = .{}, has_cubemap_for_reflection: bool = false) {
-    init(*renderer);
+    init(*renderer, "data/shaders/out/pbr_packed_texture.frag");
     init(*base);
     init(*shadow_map);
     ptr.reflection_cubemap = cubemap_for_reflection;
@@ -98,12 +113,27 @@ init :: (using ptr: *PBR_Packed_Texture_Rendering, cubemap_for_reflection: Cubem
     glUseProgram(0);
 }
 
-add_light :: (using ptr: *PBR_Packed_Texture_Rendering, position: Vector3, color: Vector3) -> light_index: s32, success: bool {
+set_model_transform :: (using ptr: *PBR_Packed_Texture_Rendering, model: *PBR_Model_Instance, model_to_world: Matrix4) {
+    for model.renderables {
+        local_to_world := model_to_world * it.local_to_model;
+
+        if it.is_transparent {
+            if it.index < 0 || it.index >= transparent_renderables.count continue;
+            transparent_renderables[it.index].sort_position = transform_point(local_to_world, it.local_center);
+            set_local_to_world_matrix(*renderer, transparent_renderables[it.index].renderable, local_to_world);
+        } else {
+            if it.index < 0 || it.index >= opaque_renderables.count continue;
+            set_local_to_world_matrix(*renderer, opaque_renderables[it.index], local_to_world);
+        }
+    }
+}
+
+add_light :: (using ptr: *PBR_Packed_Texture_Rendering, position: Vector3, color: Vector3, range: float = 0.0) -> light_index: s32, success: bool {
     if num_active_lights >= MAX_LIGHTS {
         log("Cannot add light: maximum of % lights reached", MAX_LIGHTS);
         return 0, false;
     }
-    lights[num_active_lights] = .{position = position, color = color};
+    lights[num_active_lights] = .{position = position, color = color, range = range};
     index := num_active_lights;
     num_active_lights += 1;
     loaded_any_scene_light = true;
@@ -158,15 +188,19 @@ set_lights_uniform :: (shader_program_gl_handle: GLuint, lights: [] Light) {
     for lights {
         position_name := tprint("lights[%].position\0", it_index);
         color_name := tprint("lights[%].color\0", it_index);
+        range_name := tprint("lights[%].range\0", it_index);
 
         pos_loc := glGetUniformLocation(shader_program_gl_handle, position_name.data);
         col_loc := glGetUniformLocation(shader_program_gl_handle, color_name.data);
+        range_loc := glGetUniformLocation(shader_program_gl_handle, range_name.data);
 
         glUniform3f(pos_loc, it.position.x, it.position.y, it.position.z);
         glUniform3f(col_loc, it.color.x, it.color.y, it.color.z);
+        glUniform1f(range_loc, it.range);
     }
 }
 
+// we need a better way of reaching arrays.
 set_spot_lights_uniform :: (shader_program_gl_handle: GLuint, spot_lights: [] Spot_Light) {
     for spot_lights {
         position_name := tprint("spot_lights[%].position\0", it_index);

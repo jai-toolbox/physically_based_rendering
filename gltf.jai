@@ -1,20 +1,31 @@
+PBR_GLTF_VERBOSE_LOGGING :: false;
+PBR_GLTF_BLENDER_EXPORT_INTENSITY_SCALE :: 1.0 / BLENDER_GLTF_WATTS_TO_LUMENS;
+PBR_GLTF_PUNCTUAL_LIGHT_INTENSITY_SCALE :: PBR_GLTF_BLENDER_EXPORT_INTENSITY_SCALE;
+PBR_GLTF_DIRECTIONAL_LIGHT_INTENSITY_SCALE :: PBR_GLTF_BLENDER_EXPORT_INTENSITY_SCALE;
+
+pbr_gltf_log :: (fmt: string, args: ..Any) #expand {
+    #if PBR_GLTF_VERBOSE_LOGGING {
+        log(fmt, ..args);
+    }
+}
+
 find_pbr_texture :: (
     lookup_table: *Table(string, Packed_Texture_Lookup),
     path: string,
     channel_name: string
 ) -> container_index: s32, metadata_index: s32 {
     if path.count == 0 {
-        log("  PBR channel '%': no path, using shader default", channel_name);
+        pbr_gltf_log("  PBR channel '%': no path, using shader default", channel_name);
         return -1, -1;
     }
 
     found, result := table_find(lookup_table, path);
     if !found {
-        log("  PBR channel '%': '%' not found in packed textures", channel_name, path);
+        pbr_gltf_log("  PBR channel '%': '%' not found in packed textures", channel_name, path);
         return -1, -1;
     }
 
-    log("  PBR channel '%': '%' -> container=%, metadata=%",
+    pbr_gltf_log("  PBR channel '%': '%' -> container=%, metadata=%",
         channel_name, path, result.container_index, result.metadata_index);
     return result.container_index, result.metadata_index;
 }
@@ -104,25 +115,48 @@ load_gltf_lights_recursive :: (
 
     if node.light_index >= 0 && node.light_index < gltf.all_lights.count {
         light := *gltf.all_lights[node.light_index];
-        calibrated_intensity := light.intensity / BLENDER_GLTF_WATTS_TO_LUMENS;
-        color := light.color * calibrated_intensity;
+        punctual_intensity := light.intensity * PBR_GLTF_PUNCTUAL_LIGHT_INTENSITY_SCALE;
+        punctual_color := light.color * punctual_intensity;
 
         if light.light_type == {
             case .POINT;
                 position := transform_point(world_transform, .{0, 0, 0});
-                _, ok := add_light(pbr, position, color);
-                if ok log("Loaded glTF point light '%' at {%, %, %}", light.name, position.x, position.y, position.z);
+                _, ok := add_light(pbr, position, punctual_color);
+                log("glTF light '%': type=point raw_intensity=% normalized_intensity=% uploaded_color={%, %, %} position={%, %, %} range=%",
+                    light.name,
+                    light.intensity,
+                    punctual_intensity,
+                    punctual_color.x, punctual_color.y, punctual_color.z,
+                    position.x, position.y, position.z,
+                    light.range);
+                if ok pbr_gltf_log("Loaded glTF point light '%' at {%, %, %}", light.name, position.x, position.y, position.z);
 
             case .SPOT;
                 position := transform_point(world_transform, .{0, 0, 0});
                 direction := normalize(transform_vector(world_transform, .{0, 0, -1}));
-                _, ok := add_spot_light(pbr, position, direction, color, light.inner_cone_angle, light.outer_cone_angle, light.range);
-                if ok log("Loaded glTF spot light '%' at {%, %, %}", light.name, position.x, position.y, position.z);
+                _, ok := add_spot_light(pbr, position, direction, punctual_color, light.inner_cone_angle, light.outer_cone_angle, light.range);
+                log("glTF light '%': type=spot raw_intensity=% normalized_intensity=% uploaded_color={%, %, %} position={%, %, %} direction={%, %, %} inner=% outer=% range=%",
+                    light.name,
+                    light.intensity,
+                    punctual_intensity,
+                    punctual_color.x, punctual_color.y, punctual_color.z,
+                    position.x, position.y, position.z,
+                    direction.x, direction.y, direction.z,
+                    light.inner_cone_angle, light.outer_cone_angle,
+                    light.range);
+                if ok pbr_gltf_log("Loaded glTF spot light '%' at {%, %, %}", light.name, position.x, position.y, position.z);
 
             case .DIRECTIONAL;
                 direction := normalize(transform_vector(world_transform, .{0, 0, -1}));
-                set_directional_light(pbr, direction, light.color, calibrated_intensity, true);
-                log("Loaded glTF directional light '%' direction {%, %, %}", light.name, direction.x, direction.y, direction.z);
+                directional_intensity := light.intensity * PBR_GLTF_DIRECTIONAL_LIGHT_INTENSITY_SCALE;
+                set_directional_light(pbr, direction, light.color, directional_intensity, true);
+                log("glTF light '%': type=directional raw_intensity=% normalized_intensity=% uploaded_color={%, %, %} direction={%, %, %}",
+                    light.name,
+                    light.intensity,
+                    directional_intensity,
+                    light.color.x, light.color.y, light.color.z,
+                    direction.x, direction.y, direction.z);
+                pbr_gltf_log("Loaded glTF directional light '%' direction {%, %, %}", light.name, direction.x, direction.y, direction.z);
         }
     }
 
@@ -133,7 +167,7 @@ load_gltf_lights_recursive :: (
 
 load_gltf_lights :: (pbr: *PBR_Packed_Texture_Rendering, gltf: *Gltf_Data) {
     if gltf.all_lights.count == 0 {
-        log("glTF has no KHR_lights_punctual lights");
+        pbr_gltf_log("glTF has no KHR_lights_punctual lights");
         return;
     }
 
@@ -157,32 +191,33 @@ load_gltf_into_pbr_packed_texture_renderables :: (
     metadata: *Packed_Textures_Metadata,
     renderer: *Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderer,
     opaque_renderables: *[..] Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable,
-    transparent_renderables: *[..] Transparent_PBR_Renderable
+    transparent_renderables: *[..] Transparent_PBR_Renderable,
+    loaded_model: *PBR_Model_Instance = null
 ) {
 
     lookup_table := build_packed_texture_lookup_table(metadata);
 
     mesh_transforms := collect_mesh_transforms(gltf);
 
-    log("=== BEGIN loading glTF into PBR renderables ===");
-    log("glTF has % meshes, % materials, % textures, % images",
+    pbr_gltf_log("=== BEGIN loading glTF into PBR renderables ===");
+    pbr_gltf_log("glTF has % meshes, % materials, % textures, % images",
         gltf.all_meshes.count, gltf.all_materials.count,
         gltf.all_textures.count, gltf.all_images.count);
-    log("glTF has % buffers, % buffer views, % accessors",
+    pbr_gltf_log("glTF has % buffers, % buffer views, % accessors",
         gltf.all_buffers.count, gltf.all_buffer_views.count,
         gltf.all_accessors.count);
-    log("Found % mesh instances from scene graph", mesh_transforms.count);
+    pbr_gltf_log("Found % mesh instances from scene graph", mesh_transforms.count);
 
     for buf, buf_idx: gltf.all_buffers {
-        log("  Buffer[%]: uri='%', byte_length=%, loaded_data.count=%",
+        pbr_gltf_log("  Buffer[%]: uri='%', byte_length=%, loaded_data.count=%",
             buf_idx, buf.uri, buf.byte_length, buf.loaded_data.count);
     }
 
     for img, img_idx: gltf.all_images {
-        log("  Image[%]: uri='%'", img_idx, img.uri);
+        pbr_gltf_log("  Image[%]: uri='%'", img_idx, img.uri);
     }
 
-    log("Packed texture metadata: % entries, side_length=%",
+    pbr_gltf_log("Packed texture metadata: % entries, side_length=%",
         metadata.textures.count, metadata.side_length_px);
 
     for mt: mesh_transforms {
@@ -190,37 +225,37 @@ load_gltf_into_pbr_packed_texture_renderables :: (
         if mesh_idx < 0 || mesh_idx >= gltf.all_meshes.count continue;
 
         mesh := *gltf.all_meshes[mesh_idx];
-        log("\n--- Mesh[%]: '%', % primitives ---", mesh_idx, mesh.name, mesh.primitives.count);
+        pbr_gltf_log("\n--- Mesh[%]: '%', % primitives ---", mesh_idx, mesh.name, mesh.primitives.count);
 
         for * prim, prim_idx: mesh.primitives {
-            log("\n  Primitive[%]:", prim_idx);
-            log("    position_accessor=%,  normal_accessor=%,  tangent_accessor=%",
+            pbr_gltf_log("\n  Primitive[%]:", prim_idx);
+            pbr_gltf_log("    position_accessor=%,  normal_accessor=%,  tangent_accessor=%",
                 prim.position_accessor, prim.normal_accessor, prim.tangent_accessor);
-            log("    indices_accessor=%,  material_index=%,  mode=%",
+            pbr_gltf_log("    indices_accessor=%,  material_index=%,  mode=%",
                 prim.indices_accessor, prim.material_index, prim.mode);
-            log("    texcoord_accessors.count=%", prim.texcoord_accessors.count);
+            pbr_gltf_log("    texcoord_accessors.count=%", prim.texcoord_accessors.count);
             for tc_idx: 0..prim.texcoord_accessors.count - 1 {
-                log("      texcoord_accessors[%] = %", tc_idx, prim.texcoord_accessors[tc_idx]);
+                pbr_gltf_log("      texcoord_accessors[%] = %", tc_idx, prim.texcoord_accessors[tc_idx]);
             }
 
             if prim.position_accessor >= 0 && prim.position_accessor < gltf.all_accessors.count {
                 acc := *gltf.all_accessors[prim.position_accessor];
-                log("    Position accessor: buffer_view=%, byte_offset=%, count=%, component_type=%, accessor_type=%",
+                pbr_gltf_log("    Position accessor: buffer_view=%, byte_offset=%, count=%, component_type=%, accessor_type=%",
                     acc.buffer_view_index, acc.byte_offset, acc.count, acc.component_type, acc.accessor_type);
                 if acc.buffer_view_index >= 0 && acc.buffer_view_index < gltf.all_buffer_views.count {
                     bv := *gltf.all_buffer_views[acc.buffer_view_index];
-                    log("      BufferView: buffer=%, byte_offset=%, byte_length=%, byte_stride=%",
+                    pbr_gltf_log("      BufferView: buffer=%, byte_offset=%, byte_length=%, byte_stride=%",
                         bv.buffer_index, bv.byte_offset, bv.byte_length, bv.byte_stride);
                 }
             }
 
             if prim.indices_accessor >= 0 && prim.indices_accessor < gltf.all_accessors.count {
                 acc := *gltf.all_accessors[prim.indices_accessor];
-                log("    Indices accessor: buffer_view=%, byte_offset=%, count=%, component_type=%, accessor_type=%",
+                pbr_gltf_log("    Indices accessor: buffer_view=%, byte_offset=%, count=%, component_type=%, accessor_type=%",
                     acc.buffer_view_index, acc.byte_offset, acc.count, acc.component_type, acc.accessor_type);
                 if acc.buffer_view_index >= 0 && acc.buffer_view_index < gltf.all_buffer_views.count {
                     bv := *gltf.all_buffer_views[acc.buffer_view_index];
-                    log("      BufferView: buffer=%, byte_offset=%, byte_length=%, byte_stride=%",
+                    pbr_gltf_log("      BufferView: buffer=%, byte_offset=%, byte_length=%, byte_stride=%",
                         bv.buffer_index, bv.byte_offset, bv.byte_length, bv.byte_stride);
                 }
             }
@@ -228,15 +263,15 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             renderable: Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable;
 
             positions := read_accessor_as_vector3_array(gltf, prim.position_accessor);
-            log("    Read % positions", positions.count);
+            pbr_gltf_log("    Read % positions", positions.count);
             if positions.count == 0 {
-                log("    Skipping primitive with no positions");
+                pbr_gltf_log("    Skipping primitive with no positions");
                 continue;
             }
             if positions.count >= 3 {
-                log("      positions[0] = {%, %, %}", positions[0].x, positions[0].y, positions[0].z);
-                log("      positions[1] = {%, %, %}", positions[1].x, positions[1].y, positions[1].z);
-                log("      positions[2] = {%, %, %}", positions[2].x, positions[2].y, positions[2].z);
+                pbr_gltf_log("      positions[0] = {%, %, %}", positions[0].x, positions[0].y, positions[0].z);
+                pbr_gltf_log("      positions[1] = {%, %, %}", positions[1].x, positions[1].y, positions[1].z);
+                pbr_gltf_log("      positions[2] = {%, %, %}", positions[2].x, positions[2].y, positions[2].z);
             }
 
             all_same_pos := true;
@@ -246,40 +281,40 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                     break;
                 }
             }
-            if all_same_pos log("    WARNING: first 100 positions are ALL IDENTICAL!");
+            if all_same_pos pbr_gltf_log("    WARNING: first 100 positions are ALL IDENTICAL!");
 
             normals := read_accessor_as_vector3_array(gltf, prim.normal_accessor);
-            log("    Read % normals", normals.count);
+            pbr_gltf_log("    Read % normals", normals.count);
             if normals.count == 0 {
                 array_resize(*normals, positions.count);
                 for * normals  it.* = .{0, 1, 0};
-                log("    Generated default normals");
+                pbr_gltf_log("    Generated default normals");
             }
 
             texture_coordinates := read_primitive_texcoords(gltf, prim, 0);
-            log("    Read % texture_coordinates", texture_coordinates.count);
+            pbr_gltf_log("    Read % texture_coordinates", texture_coordinates.count);
             if texture_coordinates.count == 0 {
                 array_resize(*texture_coordinates, positions.count);
                 for * texture_coordinates  it.* = .{0, 0};
-                log("    Generated default UVs");
+                pbr_gltf_log("    Generated default UVs");
             }
             if texture_coordinates.count >= 3 {
-                log("      uv[0] = {%, %}", texture_coordinates[0].x, texture_coordinates[0].y);
-                log("      uv[1] = {%, %}", texture_coordinates[1].x, texture_coordinates[1].y);
-                log("      uv[2] = {%, %}", texture_coordinates[2].x, texture_coordinates[2].y);
+                pbr_gltf_log("      uv[0] = {%, %}", texture_coordinates[0].x, texture_coordinates[0].y);
+                pbr_gltf_log("      uv[1] = {%, %}", texture_coordinates[1].x, texture_coordinates[1].y);
+                pbr_gltf_log("      uv[2] = {%, %}", texture_coordinates[2].x, texture_coordinates[2].y);
             }
 
             indices := read_accessor_as_index_array(gltf, prim.indices_accessor);
-            log("    Read % indices", indices.count);
+            pbr_gltf_log("    Read % indices", indices.count);
             if indices.count == 0 {
                 array_reserve(*indices, positions.count);
                 for i: 0..positions.count - 1 {
                     array_add(*indices, cast(u32) i);
                 }
-                log("    Generated sequential indices");
+                pbr_gltf_log("    Generated sequential indices");
             }
             if indices.count >= 6 {
-                log("      indices[0..5] = %, %, %, %, %, %",
+                pbr_gltf_log("      indices[0..5] = %, %, %, %, %, %",
                     indices[0], indices[1], indices[2], indices[3], indices[4], indices[5]);
             }
 
@@ -287,28 +322,30 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             for indices {
                 if it > max_index max_index = it;
             }
-            log("    Index range: 0 to % (position count = %)", max_index, positions.count);
+            pbr_gltf_log("    Index range: 0 to % (position count = %)", max_index, positions.count);
             if max_index >= cast(u32) positions.count {
-                log("    ERROR: max index % exceeds position count %!", max_index, positions.count);
+                pbr_gltf_log("    ERROR: max index % exceeds position count %!", max_index, positions.count);
             }
 
             all_zero_indices := true;
             for indices {
                 if it != 0 { all_zero_indices = false; break; }
             }
-            if all_zero_indices log("    WARNING: ALL INDICES ARE ZERO!");
+            if all_zero_indices pbr_gltf_log("    WARNING: ALL INDICES ARE ZERO!");
 
-            tangents: [..] Vector3;
+            tangents: [..] Vector4;
             if prim.tangent_accessor >= 0 {
                 tangents_vec4 := read_accessor_as_vector4_array(gltf, prim.tangent_accessor);
-                log("    Read % tangents from glTF (vec4)", tangents_vec4.count);
+                pbr_gltf_log("    Read % tangents from glTF (vec4)", tangents_vec4.count);
                 array_reserve(*tangents, tangents_vec4.count);
                 for tangents_vec4 {
-                    array_add(*tangents, .{it.x, it.y, it.z});
+                    array_add(*tangents, it);
                 }
             } else {
-                tangents = compute_tangents_from_indexed_mesh(positions, texture_coordinates, indices);
-                log("    Computed % tangents from geometry", tangents.count);
+                tangent_result := compute_tangents_from_indexed_triangles(positions, normals, texture_coordinates, indices);
+                tangents = tangent_result.tangents;
+                array_free(tangent_result.valid);
+                pbr_gltf_log("    Computed % tangents from geometry", tangents.count);
             }
 
             base_color_container: s32 = -1;
@@ -320,67 +357,81 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             ao_container: s32 = -1;
             ao_meta: s32 = -1;
             base_color_factor := Vector4.{1, 1, 1, 1};
+            material_parameters := Vector4.{1, 1, 1, 1};
+            glass_parameters := Vector4.{0, 1.5, 0, 0};
+            volume_parameters := Vector4.{1, 1, 1, 1000000.0};
             alpha_mode := Gltf_Alpha_Mode.OPAQUE;
             alpha_cutoff := 0.5;
 
             mat := get_gltf_material(gltf, prim.material_index);
             if mat != null {
-                log("    Material: '%'", mat.name);
-                log("      base_color_texture.texture_index = %", mat.pbr_metallic_roughness.base_color_texture.texture_index);
-                log("      metallic_roughness_texture.texture_index = %", mat.pbr_metallic_roughness.metallic_roughness_texture.texture_index);
-                log("      normal_texture.texture_index = %", mat.normal_texture.texture_index);
-                log("      occlusion_texture.texture_index = %", mat.occlusion_texture.texture_index);
-                log("      alpha_mode = %, base_color_factor.a = %", mat.alpha_mode, mat.pbr_metallic_roughness.base_color_factor.w);
+                pbr_gltf_log("    Material: '%'", mat.name);
+                pbr_gltf_log("      base_color_texture.texture_index = %", mat.pbr_metallic_roughness.base_color_texture.texture_index);
+                pbr_gltf_log("      metallic_roughness_texture.texture_index = %", mat.pbr_metallic_roughness.metallic_roughness_texture.texture_index);
+                pbr_gltf_log("      normal_texture.texture_index = %", mat.normal_texture.texture_index);
+                pbr_gltf_log("      occlusion_texture.texture_index = %", mat.occlusion_texture.texture_index);
+                pbr_gltf_log("      alpha_mode = %, base_color_factor.a = %", mat.alpha_mode, mat.pbr_metallic_roughness.base_color_factor.w);
+                pbr_gltf_log("      glass: transmission=%, ior=%, thickness=%", mat.transmission_factor, mat.ior, mat.thickness_factor);
 
                 base_color_factor = mat.pbr_metallic_roughness.base_color_factor;
+                material_parameters = .{
+                    mat.pbr_metallic_roughness.metallic_factor,
+                    mat.pbr_metallic_roughness.roughness_factor,
+                    mat.normal_texture.scale,
+                    mat.occlusion_texture.strength,
+                };
+                glass_parameters = .{
+                    mat.transmission_factor,
+                    mat.ior,
+                    mat.thickness_factor,
+                    0,
+                };
+                volume_parameters = .{
+                    mat.attenuation_color.x,
+                    mat.attenuation_color.y,
+                    mat.attenuation_color.z,
+                    mat.attenuation_distance,
+                };
                 alpha_mode = mat.alpha_mode;
                 alpha_cutoff = mat.alpha_cutoff;
 
                 bc_path := resolve_gltf_image_path(gltf, mat.pbr_metallic_roughness.base_color_texture.texture_index);
-                log("      base_color path: '%'", bc_path);
+                pbr_gltf_log("      base_color path: '%'", bc_path);
                 base_color_container, base_color_meta = find_pbr_texture(*lookup_table, bc_path, "base_color");
 
                 n_path := resolve_gltf_image_path(gltf, mat.normal_texture.texture_index);
-                log("      normal path: '%'", n_path);
+                pbr_gltf_log("      normal path: '%'", n_path);
                 normal_container, normal_meta = find_pbr_texture(*lookup_table, n_path, "normal");
 
                 mr_path := resolve_gltf_image_path(gltf, mat.pbr_metallic_roughness.metallic_roughness_texture.texture_index);
-                log("      metallic_roughness path: '%'", mr_path);
+                pbr_gltf_log("      metallic_roughness path: '%'", mr_path);
                 mr_container, mr_meta = find_pbr_texture(*lookup_table, mr_path, "metallic_roughness");
 
                 ao_path := resolve_gltf_image_path(gltf, mat.occlusion_texture.texture_index);
-                log("      ambient_occlusion path: '%'", ao_path);
+                pbr_gltf_log("      ambient_occlusion path: '%'", ao_path);
                 ao_container, ao_meta = find_pbr_texture(*lookup_table, ao_path, "ambient_occlusion");
+                if ao_container < 0 {
+                    material_parameters.w = 0.0;
+                }
 
-                log("      Resolved: bc=(%,%), n=(%,%), mr=(%,%), ao=(%,%)",
+                pbr_gltf_log("      Resolved: bc=(%,%), n=(%,%), mr=(%,%), ao=(%,%)",
                     base_color_container, base_color_meta,
                     normal_container, normal_meta,
                     mr_container, mr_meta,
                     ao_container, ao_meta);
             } else {
-                log("    No material for this primitive");
-            }
-
-            remapped_uvs: [..] Vector2;
-            array_reserve(*remapped_uvs, texture_coordinates.count);
-            for texture_coordinates {
-                array_add(*remapped_uvs, remap_uv_to_packed_space(it, metadata, base_color_meta));
-            }
-            if remapped_uvs.count >= 3 {
-                log("    Remapped uv[0] = {%, %}", remapped_uvs[0].x, remapped_uvs[0].y);
-                log("    Remapped uv[1] = {%, %}", remapped_uvs[1].x, remapped_uvs[1].y);
-                log("    Remapped uv[2] = {%, %}", remapped_uvs[2].x, remapped_uvs[2].y);
+                pbr_gltf_log("    No material for this primitive");
             }
 
             renderable.indices = indices;
             renderable.positions = positions;
             renderable.normals = normals;
             renderable.tangents = tangents;
-            renderable.texture_coordinates = remapped_uvs;
+            renderable.texture_coordinates = texture_coordinates;
 
             vertex_count := positions.count;
 
-            log("    Filling renderable: % vertices, % indices", vertex_count, indices.count);
+            pbr_gltf_log("    Filling renderable: % vertices, % indices", vertex_count, indices.count);
 
             array_resize(*renderable.packed_texture_index_for_base_color, vertex_count);
             array_resize(*renderable.packed_texture_bounding_box_index_for_base_color, vertex_count);
@@ -391,6 +442,9 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             array_resize(*renderable.packed_texture_index_for_ambient_occlusion, vertex_count);
             array_resize(*renderable.packed_texture_bounding_box_index_for_ambient_occlusion, vertex_count);
             array_resize(*renderable.base_color_factors, vertex_count);
+            array_resize(*renderable.material_parameters, vertex_count);
+            array_resize(*renderable.glass_parameters, vertex_count);
+            array_resize(*renderable.volume_parameters, vertex_count);
             array_resize(*renderable.alpha_parameters, vertex_count);
 
             alpha_mode_for_shader := PBR_ALPHA_MODE_OPAQUE;
@@ -399,6 +453,9 @@ load_gltf_into_pbr_packed_texture_renderables :: (
 
             for i: 0..vertex_count - 1 {
                 renderable.base_color_factors[i] = base_color_factor;
+                renderable.material_parameters[i] = material_parameters;
+                renderable.glass_parameters[i] = glass_parameters;
+                renderable.volume_parameters[i] = volume_parameters;
                 renderable.alpha_parameters[i] = .{alpha_mode_for_shader, alpha_cutoff};
 
                 renderable.packed_texture_index_for_base_color[i] = base_color_container;
@@ -414,20 +471,20 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 renderable.packed_texture_bounding_box_index_for_ambient_occlusion[i] = ao_meta;
             }
 
-            log("    Pre-buffer check:");
-            log("      renderable.positions.count = %", renderable.positions.count);
-            log("      renderable.normals.count = %", renderable.normals.count);
-            log("      renderable.tangents.count = %", renderable.tangents.count);
-            log("      renderable.texture_coordinates.count = %", renderable.texture_coordinates.count);
-            log("      renderable.indices.count = %", renderable.indices.count);
-            log("      renderable.packed_texture_index_for_base_color.count = %", renderable.packed_texture_index_for_base_color.count);
+            pbr_gltf_log("    Pre-buffer check:");
+            pbr_gltf_log("      renderable.positions.count = %", renderable.positions.count);
+            pbr_gltf_log("      renderable.normals.count = %", renderable.normals.count);
+            pbr_gltf_log("      renderable.tangents.count = %", renderable.tangents.count);
+            pbr_gltf_log("      renderable.texture_coordinates.count = %", renderable.texture_coordinates.count);
+            pbr_gltf_log("      renderable.indices.count = %", renderable.indices.count);
+            pbr_gltf_log("      renderable.packed_texture_index_for_base_color.count = %", renderable.packed_texture_index_for_base_color.count);
 
             if renderable.positions.count != renderable.normals.count
-                log("      ERROR: positions.count != normals.count");
+                pbr_gltf_log("      ERROR: positions.count != normals.count");
             if renderable.positions.count != renderable.tangents.count
-                log("      ERROR: positions.count != tangents.count");
+                pbr_gltf_log("      ERROR: positions.count != tangents.count");
             if renderable.positions.count != renderable.texture_coordinates.count
-                log("      ERROR: positions.count != texture_coordinates.count");
+                pbr_gltf_log("      ERROR: positions.count != texture_coordinates.count");
 
             local_to_world := mt.world_transform;
 
@@ -435,31 +492,57 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             if !success {
                 log_error("    FAILED to buffer PBR primitive from mesh '%'", mesh.name);
             } else {
-                log("    Buffered OK: object_index=%, local_to_world_index=%",
+                pbr_gltf_log("    Buffered OK: object_index=%, local_to_world_index=%",
                     renderable.object_index, renderable.local_to_world_index);
 
                 set_local_to_world_matrix(renderer, renderable, local_to_world);
 
             }
 
-            if alpha_mode == .BLEND {
+            local_center := compute_center(renderable.positions);
+            if alpha_mode == .BLEND || glass_parameters.x > 0.0 {
                 local_center := compute_center(renderable.positions);
                 sort_position := transform_point(local_to_world, local_center);
+                model_index := transparent_renderables.count;
                 array_add(transparent_renderables, .{
                     renderable = renderable,
                     sort_position = sort_position,
                 });
+
+                if loaded_model {
+                    array_add(*loaded_model.renderables, .{
+                        is_transparent = true,
+                        index = model_index,
+                        local_to_model = local_to_world,
+                        local_center = local_center,
+                    });
+                }
             } else {
+                model_index := opaque_renderables.count;
                 array_add(opaque_renderables, renderable);
+                if loaded_model {
+                    array_add(*loaded_model.renderables, .{
+                        is_transparent = false,
+                        index = model_index,
+                        local_to_model = local_to_world,
+                        local_center = local_center,
+                    });
+                }
             }
         }
     }
 
-    log("\n=== DONE: loaded % opaque and % transparent renderables ===", opaque_renderables.count, transparent_renderables.count);
+    pbr_gltf_log("\n=== DONE: loaded % opaque and % transparent renderables ===", opaque_renderables.count, transparent_renderables.count);
+}
+
+load_gltf_model_instance :: (using ptr: *PBR_Packed_Texture_Rendering, gltf_path: string) -> PBR_Model_Instance {
+    result: PBR_Model_Instance;
+    gltf := load_gltf(gltf_path);
+    load_gltf_lights(ptr, *gltf);
+    load_gltf_into_pbr_packed_texture_renderables(*gltf, *metadata, *renderer, *opaque_renderables, *transparent_renderables, *result);
+    return result;
 }
 
 load_gltf_model :: (using ptr: *PBR_Packed_Texture_Rendering, gltf_path: string) {
-    gltf := load_gltf(gltf_path);
-    load_gltf_lights(ptr, *gltf);
-    load_gltf_into_pbr_packed_texture_renderables(*gltf, *metadata, *renderer, *opaque_renderables, *transparent_renderables);
+    _ := load_gltf_model_instance(ptr, gltf_path);
 }

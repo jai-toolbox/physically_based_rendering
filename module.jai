@@ -13,6 +13,7 @@
 #load "core.jai";
 #load "debug_gizmos.jai";
 #load "mesh_helpers.jai";
+#load "compute_tangents.jai";
 #load "shadows.jai";
 #load "gltf.jai";
 #load "render.jai";
