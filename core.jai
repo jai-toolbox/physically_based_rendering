@@ -98,7 +98,7 @@ PBR_Model_Instance :: struct {
 }
 
 init :: (using ptr: *PBR_Packed_Texture_Rendering, cubemap_for_reflection: Cubemap = .{}, has_cubemap_for_reflection: bool = false) {
-    init(*renderer, "data/shaders/out/pbr_packed_texture.frag");
+    init(*renderer);
     init(*base);
     init(*shadow_map);
     ptr.reflection_cubemap = cubemap_for_reflection;
