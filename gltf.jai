@@ -460,6 +460,7 @@ load_gltf_into_pbr_packed_texture_renderables :: (
 
 load_gltf_model :: (using ptr: *PBR_Packed_Texture_Rendering, gltf_path: string) {
     gltf := load_gltf(gltf_path);
+    defer deinit(*gltf);
     load_gltf_lights(ptr, *gltf);
     load_gltf_into_pbr_packed_texture_renderables(*gltf, *metadata, *renderer, *opaque_renderables, *transparent_renderables);
 }
