@@ -98,7 +98,10 @@ render_directional_shadow_map :: (
 
     upload_to_gpu(*renderer.ltw_pool);
 
-    glBindVertexArray(renderer.vertex_attribute_array_gl_handle);
+    shadow_vertex_array: GLuint;
+    glGenVertexArrays(1, *shadow_vertex_array);
+    glBindVertexArray(shadow_vertex_array);
+    bind_directional_shadow_attributes(shader_program_gl_handle, renderer);
 
     geom_indices_to_render: [..] u32;
     defer array_free(geom_indices_to_render);
@@ -117,11 +120,31 @@ render_directional_shadow_map :: (
     glDrawElements(GL_TRIANGLES, xx geom_indices_to_render.count, GL_UNSIGNED_INT, cast(*void) 0);
 
     glBindVertexArray(0);
+    glDeleteVertexArrays(1, *shadow_vertex_array);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDrawBuffer(GL_BACK);
     glReadBuffer(GL_BACK);
     glViewport(0, 0, xx window_width, xx window_height);
+}
+
+bind_directional_shadow_attributes :: (
+    shader: GLuint,
+    renderer: *Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderer
+) {
+    local_to_world_location := glGetAttribLocation(shader, "local_to_world_index");
+    if local_to_world_location >= 0 {
+        glBindBuffer(GL_ARRAY_BUFFER, renderer.local_to_world_index_buffer_gl_handle);
+        glEnableVertexAttribArray(xx local_to_world_location);
+        glVertexAttribIPointer(xx local_to_world_location, 1, GL_UNSIGNED_INT, 0, null);
+    }
+
+    position_location := glGetAttribLocation(shader, "position");
+    if position_location >= 0 {
+        glBindBuffer(GL_ARRAY_BUFFER, renderer.positions_buffer_gl_handle);
+        glEnableVertexAttribArray(xx position_location);
+        glVertexAttribPointer(xx position_location, 3, GL_FLOAT, GL_FALSE, 0, null);
+    }
 }
 
 set_directional_light_uniforms :: (
