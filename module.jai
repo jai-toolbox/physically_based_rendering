@@ -9,6 +9,7 @@
 #import "tbx/model_loading";
 #import "tbx/assets";
 #import "tbx/geometry";
+#import "tbx/lighting";
 
 #load "core.jai";
 #load "debug_gizmos.jai";

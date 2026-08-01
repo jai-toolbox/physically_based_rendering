@@ -1,23 +1,7 @@
-MAX_LIGHTS :: 16;
-MAX_SPOT_LIGHTS :: 16;
 SHADOW_MAP_SIZE :: 2048;
-BLENDER_GLTF_WATTS_TO_LUMENS :: 683.0;
 
-// this is a point light, maybe call it that then?
-Light :: struct {
-    position: Vector3;
-    color: Vector3;
-    range: float; // the maximum distance this light can affect something
-}
-
-Spot_Light :: struct {
-    position: Vector3;
-    direction: Vector3;
-    color: Vector3;
-    inner_cos: float;
-    outer_cos: float;
-    range: float;
-}
+MAX_LIGHTS      :: MAX_POINT_LIGHTS;
+Light           :: Point_Light;
 
 /*
 Lighting mobility note for future light baking:
@@ -34,14 +18,6 @@ static caster + static receiver under static light can be baked; any dynamic cas
 
 When we add baked lighting, avoid making the shader decide the whole matrix. The CPU should split renderables/lights into queues and upload only the relevant realtime light lists. Static baked renderables should sample baked diffuse lighting and then add runtime dynamic/mixed contributions, while dynamic renderables use realtime lights and/or probes.
 */
-
-Directional_Light :: struct {
-    direction: Vector3 = .{-0.4, -1.0, -0.35};
-    color: Vector3 = .{1.0, 0.96, 0.88};
-    intensity: float = 2.0;
-    enabled := false;
-    casts_shadows := true;
-}
 
 Directional_Shadow_Map :: struct {
     framebuffer_gl_handle: GLuint;
@@ -224,4 +200,3 @@ set_spot_lights_uniform :: (shader_program_gl_handle: GLuint, spot_lights: [] Sp
         glUniform1f(loc, it.range);
     }
 }
-
