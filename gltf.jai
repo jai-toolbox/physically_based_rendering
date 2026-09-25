@@ -94,7 +94,7 @@ collect_mesh_transforms :: (gltf: *Gltf_Data) -> [..] Mesh_Transform {
         return result;
     }
 
-    for scene.nodes {
+    for scene.root_nodes {
         collect_mesh_transforms_recursive(gltf, it, Matrix4_Identity, *result);
     }
 
@@ -179,7 +179,7 @@ load_gltf_lights :: (pbr: *PBR_Packed_Texture_Rendering, gltf: *Gltf_Data) {
         return;
     }
 
-    for scene.nodes {
+    for scene.root_nodes {
         load_gltf_lights_recursive(pbr, gltf, it, Matrix4_Identity);
     }
 }
@@ -214,7 +214,7 @@ load_gltf_into_pbr_packed_texture_renderables :: (
     }
 
     for img, img_idx: gltf.all_images {
-        pbr_gltf_log("  Image[%]: uri='%'", img_idx, img.uri);
+        pbr_gltf_log("  Image[%]: uri='%'", img_idx, img.universal_resource_identifier);
     }
 
     pbr_gltf_log("Packed texture metadata: % entries, side_length=%",

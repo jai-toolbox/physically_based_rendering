@@ -17,14 +17,14 @@ prepare_pbr_render :: (using ptr: *PBR_Packed_Texture_Rendering, camera_position
     set_use_reflection_cubemap_uniform(*renderer, has_reflection_cubemap);
     set_lights_uniform(shader, array_view(lights, 0, num_active_lights));
     spot_count_loc := glGetUniformLocation(shader, "num_active_spot_lights");
-    glUniform1i(spot_count_loc, num_active_spot_lights);
+    gl_set_uniform_1i_on_active_shader_program(spot_count_loc, num_active_spot_lights);
     set_spot_lights_uniform(shader, array_view(spot_lights, 0, num_active_spot_lights));
     set_directional_light_uniforms(shader, directional_light, *shadow_map);
-    glUniform1i(glGetUniformLocation(shader, "decode_base_color_srgb"), 1);
-    glUniform1f(glGetUniformLocation(shader, "ambient_strength"), ambient_strength);
+    gl_set_uniform_1i_on_active_shader_program(glGetUniformLocation(shader, "decode_base_color_srgb"), 1);
+    gl_set_uniform_1f_on_active_shader_program(glGetUniformLocation(shader, "ambient_strength"), ambient_strength);
     world_background_loc := glGetUniformLocation(shader, "world_background_color");
-    glUniform3f(world_background_loc, world_background_color.x, world_background_color.y, world_background_color.z);
-    glUniform1i(glGetUniformLocation(shader, "use_pbr_transparency_resolve"), 0);
+    gl_set_uniform_3f_on_active_shader_program(world_background_loc, world_background_color.x, world_background_color.y, world_background_color.z);
+    gl_set_uniform_1i_on_active_shader_program(glGetUniformLocation(shader, "use_pbr_transparency_resolve"), 0);
 
     glUseProgram(0);
 }
@@ -63,7 +63,7 @@ render_pbr_transparent :: (using ptr: *PBR_Packed_Texture_Rendering, camera_posi
         glBlendFuncSeparate(GL_ONE, GL_SRC1_COLOR, GL_ONE, GL_SRC1_ALPHA);
         glDepthMask(GL_FALSE);
         glUseProgram(renderer.shader_program_gl_handle);
-        glUniform1i(glGetUniformLocation(renderer.shader_program_gl_handle, "use_pbr_transparency_resolve"), 1);
+        gl_set_uniform_1i_on_active_shader_program(glGetUniformLocation(renderer.shader_program_gl_handle, "use_pbr_transparency_resolve"), 1);
         glUseProgram(0);
 
         for sorted {

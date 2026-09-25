@@ -170,9 +170,9 @@ set_lights_uniform :: (shader_program_gl_handle: GLuint, lights: [] Light) {
         col_loc := glGetUniformLocation(shader_program_gl_handle, color_name.data);
         range_loc := glGetUniformLocation(shader_program_gl_handle, range_name.data);
 
-        glUniform3f(pos_loc, it.position.x, it.position.y, it.position.z);
-        glUniform3f(col_loc, it.color.x, it.color.y, it.color.z);
-        glUniform1f(range_loc, it.range);
+        gl_set_uniform_3f_on_active_shader_program(pos_loc, it.position.x, it.position.y, it.position.z);
+        gl_set_uniform_3f_on_active_shader_program(col_loc, it.color.x, it.color.y, it.color.z);
+        gl_set_uniform_1f_on_active_shader_program(range_loc, it.range);
     }
 }
 
@@ -187,16 +187,16 @@ set_spot_lights_uniform :: (shader_program_gl_handle: GLuint, spot_lights: [] Sp
         range_name := tprint("spot_lights[%].range\0", it_index);
 
         loc := glGetUniformLocation(shader_program_gl_handle, position_name.data);
-        glUniform3f(loc, it.position.x, it.position.y, it.position.z);
+        gl_set_uniform_3f_on_active_shader_program(loc, it.position.x, it.position.y, it.position.z);
         loc = glGetUniformLocation(shader_program_gl_handle, direction_name.data);
-        glUniform3f(loc, it.direction.x, it.direction.y, it.direction.z);
+        gl_set_uniform_3f_on_active_shader_program(loc, it.direction.x, it.direction.y, it.direction.z);
         loc = glGetUniformLocation(shader_program_gl_handle, color_name.data);
-        glUniform3f(loc, it.color.x, it.color.y, it.color.z);
+        gl_set_uniform_3f_on_active_shader_program(loc, it.color.x, it.color.y, it.color.z);
         loc = glGetUniformLocation(shader_program_gl_handle, inner_name.data);
-        glUniform1f(loc, it.inner_cos);
+        gl_set_uniform_1f_on_active_shader_program(loc, it.inner_cos);
         loc = glGetUniformLocation(shader_program_gl_handle, outer_name.data);
-        glUniform1f(loc, it.outer_cos);
+        gl_set_uniform_1f_on_active_shader_program(loc, it.outer_cos);
         loc = glGetUniformLocation(shader_program_gl_handle, range_name.data);
-        glUniform1f(loc, it.range);
+        gl_set_uniform_1f_on_active_shader_program(loc, it.range);
     }
 }

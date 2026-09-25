@@ -94,7 +94,7 @@ render_directional_shadow_map :: (
     glClear(GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(shader_program_gl_handle);
-    glUniformMatrix4fv(world_to_light_clip_uniform_location, 1, GL_TRUE, *world_to_light_clip.coef[0][0]);
+    gl_set_uniform_matrix_4fv_on_active_shader_program(world_to_light_clip_uniform_location, 1, GL_TRUE, *world_to_light_clip.coef[0][0]);
 
     upload_to_gpu(*renderer.ltw_pool);
 
@@ -155,23 +155,23 @@ set_directional_light_uniforms :: (
     direction := normalize(light.direction);
 
     loc := glGetUniformLocation(shader, "directional_light.direction");
-    glUniform3f(loc, direction.x, direction.y, direction.z);
+    gl_set_uniform_3f_on_active_shader_program(loc, direction.x, direction.y, direction.z);
 
     loc = glGetUniformLocation(shader, "directional_light.color");
-    glUniform3f(loc, light.color.x, light.color.y, light.color.z);
+    gl_set_uniform_3f_on_active_shader_program(loc, light.color.x, light.color.y, light.color.z);
 
     loc = glGetUniformLocation(shader, "directional_light.intensity");
-    glUniform1f(loc, light.intensity);
+    gl_set_uniform_1f_on_active_shader_program(loc, light.intensity);
 
     loc = glGetUniformLocation(shader, "directional_light.enabled");
-    glUniform1i(loc, xx light.enabled);
+    gl_set_uniform_1i_on_active_shader_program(loc, xx light.enabled);
 
     loc = glGetUniformLocation(shader, "directional_shadow_map");
-    glUniform1i(loc, 3);
+    gl_set_uniform_1i_on_active_shader_program(loc, 3);
 
     loc = glGetUniformLocation(shader, "use_directional_shadow_map");
-    glUniform1i(loc, xx (light.enabled && light.casts_shadows && shadow_map.initialized));
+    gl_set_uniform_1i_on_active_shader_program(loc, xx (light.enabled && light.casts_shadows && shadow_map.initialized));
 
     loc = glGetUniformLocation(shader, "world_to_light_clip");
-    glUniformMatrix4fv(loc, 1, GL_TRUE, *shadow_map.world_to_light_clip.coef[0][0]);
+    gl_set_uniform_matrix_4fv_on_active_shader_program(loc, 1, GL_TRUE, *shadow_map.world_to_light_clip.coef[0][0]);
 }
