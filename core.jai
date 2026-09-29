@@ -4,7 +4,7 @@ MAX_LIGHTS      :: MAX_POINT_LIGHTS;
 Light           :: Point_Light;
 
 /*
-Lighting mobility note for future light baking:
+lighting mobility note for future light baking:
 
 The important split is light mobility vs receiver mobility.
 
@@ -48,6 +48,7 @@ PBR_Packed_Texture_Rendering :: struct {
     has_reflection_cubemap := false;
     ambient_strength: float32 = 0.03;
     world_background_color := Vector3.{0.05, 0.05, 0.08};
+    debug_render_normals := false;
 
     directional_light: Directional_Light;
     shadow_map: Directional_Shadow_Map;
@@ -80,13 +81,13 @@ init :: (using ptr: *PBR_Packed_Texture_Rendering, cubemap_for_reflection: Cubem
     ptr.reflection_cubemap = cubemap_for_reflection;
     ptr.has_reflection_cubemap = has_cubemap_for_reflection;
 
-    glUseProgram(renderer.shader_program_gl_handle);
+    gl_set_active_shader_program(renderer.shader_program_gl_handle);
     set_packed_textures_uniform(*renderer, 0);
     set_packed_texture_bounding_boxes_uniform(*renderer, 1);
     set_reflection_cubemap_uniform(*renderer, 2);
     set_use_reflection_cubemap_uniform(*renderer, has_cubemap_for_reflection);
     set_reflection_strength_uniform(*renderer, 0.75);
-    glUseProgram(0);
+    gl_clear_active_shader_program();
 }
 
 set_model_transform :: (using ptr: *PBR_Packed_Texture_Rendering, model: *PBR_Model_Instance, model_to_world: Matrix4) {
@@ -104,12 +105,24 @@ set_model_transform :: (using ptr: *PBR_Packed_Texture_Rendering, model: *PBR_Mo
     }
 }
 
-add_light :: (using ptr: *PBR_Packed_Texture_Rendering, position: Vector3, color: Vector3, range: float = 0.0) -> light_index: s32, success: bool {
+add_light :: (
+    using ptr: *PBR_Packed_Texture_Rendering,
+    position: Vector3,
+    color: Vector3,
+    range: float = 0.0,
+    intensity: float = 1.0
+) -> light_index: s32, success: bool {
     if num_active_lights >= MAX_LIGHTS {
         log("Cannot add light: maximum of % lights reached", MAX_LIGHTS);
         return 0, false;
     }
-    lights[num_active_lights] = .{position = position, color = color, range = range};
+    lights[num_active_lights] = .{
+        position = position,
+        color = color,
+        intensity = intensity,
+        range = range,
+        enabled = true,
+    };
     index := num_active_lights;
     num_active_lights += 1;
     loaded_any_scene_light = true;
@@ -123,7 +136,8 @@ add_spot_light :: (
     color: Vector3,
     inner_cone_angle: float,
     outer_cone_angle: float,
-    range: float
+    range: float,
+    intensity: float = 1.0
 ) -> light_index: s32, success: bool {
     if num_active_spot_lights >= MAX_SPOT_LIGHTS {
         log("Cannot add spot light: maximum of % lights reached", MAX_SPOT_LIGHTS);
@@ -134,9 +148,11 @@ add_spot_light :: (
         position = position,
         direction = normalize(direction),
         color = color,
+        intensity = intensity,
         inner_cos = cos(inner_cone_angle),
         outer_cos = cos(outer_cone_angle),
         range = range,
+        enabled = true,
     };
 
     index := num_active_spot_lights;
@@ -164,15 +180,21 @@ set_lights_uniform :: (shader_program_gl_handle: GLuint, lights: [] Light) {
     for lights {
         position_name := tprint("lights[%].position\0", it_index);
         color_name := tprint("lights[%].color\0", it_index);
+        intensity_name := tprint("lights[%].intensity\0", it_index);
         range_name := tprint("lights[%].range\0", it_index);
+        enabled_name := tprint("lights[%].enabled\0", it_index);
 
-        pos_loc := glGetUniformLocation(shader_program_gl_handle, position_name.data);
-        col_loc := glGetUniformLocation(shader_program_gl_handle, color_name.data);
-        range_loc := glGetUniformLocation(shader_program_gl_handle, range_name.data);
+        pos_loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, position_name.data);
+        col_loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, color_name.data);
+        intensity_loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, intensity_name.data);
+        range_loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, range_name.data);
+        enabled_loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, enabled_name.data);
 
         gl_set_uniform_3f_on_active_shader_program(pos_loc, it.position.x, it.position.y, it.position.z);
         gl_set_uniform_3f_on_active_shader_program(col_loc, it.color.x, it.color.y, it.color.z);
+        gl_set_uniform_1f_on_active_shader_program(intensity_loc, it.intensity);
         gl_set_uniform_1f_on_active_shader_program(range_loc, it.range);
+        gl_set_uniform_1i_on_active_shader_program(enabled_loc, cast(s32) ifx it.enabled then 1 else 0);
     }
 }
 
@@ -182,21 +204,27 @@ set_spot_lights_uniform :: (shader_program_gl_handle: GLuint, spot_lights: [] Sp
         position_name := tprint("spot_lights[%].position\0", it_index);
         direction_name := tprint("spot_lights[%].direction\0", it_index);
         color_name := tprint("spot_lights[%].color\0", it_index);
+        intensity_name := tprint("spot_lights[%].intensity\0", it_index);
         inner_name := tprint("spot_lights[%].inner_cos\0", it_index);
         outer_name := tprint("spot_lights[%].outer_cos\0", it_index);
         range_name := tprint("spot_lights[%].range\0", it_index);
+        enabled_name := tprint("spot_lights[%].enabled\0", it_index);
 
-        loc := glGetUniformLocation(shader_program_gl_handle, position_name.data);
+        loc := gl_get_uniform_location_in_shader_program(shader_program_gl_handle, position_name.data);
         gl_set_uniform_3f_on_active_shader_program(loc, it.position.x, it.position.y, it.position.z);
-        loc = glGetUniformLocation(shader_program_gl_handle, direction_name.data);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, direction_name.data);
         gl_set_uniform_3f_on_active_shader_program(loc, it.direction.x, it.direction.y, it.direction.z);
-        loc = glGetUniformLocation(shader_program_gl_handle, color_name.data);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, color_name.data);
         gl_set_uniform_3f_on_active_shader_program(loc, it.color.x, it.color.y, it.color.z);
-        loc = glGetUniformLocation(shader_program_gl_handle, inner_name.data);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, intensity_name.data);
+        gl_set_uniform_1f_on_active_shader_program(loc, it.intensity);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, inner_name.data);
         gl_set_uniform_1f_on_active_shader_program(loc, it.inner_cos);
-        loc = glGetUniformLocation(shader_program_gl_handle, outer_name.data);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, outer_name.data);
         gl_set_uniform_1f_on_active_shader_program(loc, it.outer_cos);
-        loc = glGetUniformLocation(shader_program_gl_handle, range_name.data);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, range_name.data);
         gl_set_uniform_1f_on_active_shader_program(loc, it.range);
+        loc = gl_get_uniform_location_in_shader_program(shader_program_gl_handle, enabled_name.data);
+        gl_set_uniform_1i_on_active_shader_program(loc, cast(s32) ifx it.enabled then 1 else 0);
     }
 }

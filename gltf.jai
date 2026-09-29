@@ -30,6 +30,34 @@ find_pbr_texture :: (
     return result.container_index, result.metadata_index;
 }
 
+read_transformed_texture_coordinates :: (
+    gltf: *Gltf_Data,
+    primitive: *Gltf_Primitive,
+    channel: int,
+    transform: Gltf_Texture_Transform,
+    vertex_count: int,
+) -> [..] Vector2 {
+    source := read_primitive_texcoords(gltf, primitive, channel);
+    result: [..] Vector2;
+    array_resize(*result, vertex_count);
+
+    for i: 0..vertex_count - 1 {
+        uv := Vector2.{};
+        if i < source.count uv = source[i];
+
+        scaled := uv * transform.scale;
+        cosine := cos(transform.rotation);
+        sine := sin(transform.rotation);
+        result[i] = transform.offset + Vector2.{
+            cosine * scaled.x - sine * scaled.y,
+            sine * scaled.x + cosine * scaled.y,
+        };
+    }
+
+    array_free(source);
+    return result;
+}
+
 // startfold node transform helpers
 
 compute_node_local_transform :: (node: *Gltf_Node) -> Matrix4 {
@@ -116,13 +144,13 @@ load_gltf_lights_recursive :: (
     if node.light_index >= 0 && node.light_index < gltf.all_lights.count {
         light := *gltf.all_lights[node.light_index];
         punctual_intensity := light.intensity * PBR_GLTF_PUNCTUAL_LIGHT_INTENSITY_SCALE;
-        punctual_color := light.color * punctual_intensity;
+        punctual_color := light.color;
 
         if light.light_type == {
             case .POINT;
                 position := transform_point(world_transform, .{0, 0, 0});
-                _, ok := add_light(pbr, position, punctual_color);
-                log("glTF light '%': type=point raw_intensity=% normalized_intensity=% uploaded_color={%, %, %} position={%, %, %} range=%",
+                _, ok := add_light(pbr, position, punctual_color, light.range, punctual_intensity);
+                log("glTF light '%': type=point raw_intensity=% normalized_intensity=% color={%, %, %} position={%, %, %} range=%",
                     light.name,
                     light.intensity,
                     punctual_intensity,
@@ -134,8 +162,8 @@ load_gltf_lights_recursive :: (
             case .SPOT;
                 position := transform_point(world_transform, .{0, 0, 0});
                 direction := normalize(transform_vector(world_transform, .{0, 0, -1}));
-                _, ok := add_spot_light(pbr, position, direction, punctual_color, light.inner_cone_angle, light.outer_cone_angle, light.range);
-                log("glTF light '%': type=spot raw_intensity=% normalized_intensity=% uploaded_color={%, %, %} position={%, %, %} direction={%, %, %} inner=% outer=% range=%",
+                _, ok := add_spot_light(pbr, position, direction, punctual_color, light.inner_cone_angle, light.outer_cone_angle, light.range, punctual_intensity);
+                log("glTF light '%': type=spot raw_intensity=% normalized_intensity=% color={%, %, %} position={%, %, %} direction={%, %, %} inner=% outer=% range=%",
                     light.name,
                     light.intensity,
                     punctual_intensity,
@@ -291,18 +319,35 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 pbr_gltf_log("    Generated default normals");
             }
 
-            texture_coordinates := read_primitive_texcoords(gltf, prim, 0);
-            pbr_gltf_log("    Read % texture_coordinates", texture_coordinates.count);
-            if texture_coordinates.count == 0 {
-                array_resize(*texture_coordinates, positions.count);
-                for * texture_coordinates  it.* = .{0, 0};
-                pbr_gltf_log("    Generated default UVs");
+            mat := get_gltf_material(gltf, prim.material_index);
+
+            base_color_channel := 0;
+            normal_channel := 0;
+            metallic_roughness_channel := 0;
+            ambient_occlusion_channel := 0;
+            base_color_transform: Gltf_Texture_Transform;
+            normal_transform: Gltf_Texture_Transform;
+            metallic_roughness_transform: Gltf_Texture_Transform;
+            ambient_occlusion_transform: Gltf_Texture_Transform;
+            if mat != null {
+                base_color_channel = mat.pbr_metallic_roughness.base_color_texture.texcoord;
+                base_color_transform = mat.pbr_metallic_roughness.base_color_texture.transform;
+                normal_channel = mat.normal_texture.texcoord;
+                normal_transform = mat.normal_texture.transform;
+                metallic_roughness_channel = mat.pbr_metallic_roughness.metallic_roughness_texture.texcoord;
+                metallic_roughness_transform = mat.pbr_metallic_roughness.metallic_roughness_texture.transform;
+                ambient_occlusion_channel = mat.occlusion_texture.texcoord;
+                ambient_occlusion_transform = mat.occlusion_texture.transform;
             }
-            if texture_coordinates.count >= 3 {
-                pbr_gltf_log("      uv[0] = {%, %}", texture_coordinates[0].x, texture_coordinates[0].y);
-                pbr_gltf_log("      uv[1] = {%, %}", texture_coordinates[1].x, texture_coordinates[1].y);
-                pbr_gltf_log("      uv[2] = {%, %}", texture_coordinates[2].x, texture_coordinates[2].y);
-            }
+
+            base_color_texture_coordinates := read_transformed_texture_coordinates(
+                gltf, prim, base_color_channel, base_color_transform, positions.count);
+            normal_texture_coordinates := read_transformed_texture_coordinates(
+                gltf, prim, normal_channel, normal_transform, positions.count);
+            metallic_roughness_texture_coordinates := read_transformed_texture_coordinates(
+                gltf, prim, metallic_roughness_channel, metallic_roughness_transform, positions.count);
+            ambient_occlusion_texture_coordinates := read_transformed_texture_coordinates(
+                gltf, prim, ambient_occlusion_channel, ambient_occlusion_transform, positions.count);
 
             indices := read_accessor_as_index_array(gltf, prim.indices_accessor);
             pbr_gltf_log("    Read % indices", indices.count);
@@ -334,7 +379,21 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             if all_zero_indices pbr_gltf_log("    WARNING: ALL INDICES ARE ZERO!");
 
             tangents: [..] Vector4;
-            if prim.tangent_accessor >= 0 {
+            if mat != null && mat.normal_texture.texture_index >= 0 {
+                /*
+                glTF tangents describe the primitive's base UV set, while a
+                normal texture may select another set or apply
+                KHR_texture_transform. Build the tangent frame from the
+                coordinates that actually sample the normal texture.
+                */
+                tangents = compute_tangents_from_indexed_mesh(
+                    positions,
+                    normals,
+                    normal_texture_coordinates,
+                    indices,
+                );
+                pbr_gltf_log("    Computed % tangents from normal-texture UVs", tangents.count);
+            } else if prim.tangent_accessor >= 0 {
                 tangents_vec4 := read_accessor_as_vector4_array(gltf, prim.tangent_accessor);
                 pbr_gltf_log("    Read % tangents from glTF (vec4)", tangents_vec4.count);
                 array_reserve(*tangents, tangents_vec4.count);
@@ -342,10 +401,20 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                     array_add(*tangents, it);
                 }
             } else {
-                tangent_result := compute_tangents_from_indexed_triangles(positions, normals, texture_coordinates, indices);
-                tangents = tangent_result.tangents;
-                array_free(tangent_result.valid);
-                pbr_gltf_log("    Computed % tangents from geometry", tangents.count);
+                /*
+                without a normal texture, the shader's flat tangent-space
+                normal resolves to the vertex normal. It only requires a
+                valid orthogonal tangent, not an expensive UV solve.
+                */
+                array_resize(*tangents, positions.count);
+                for i: 0..positions.count - 1 {
+                    n := normals[i];
+                    reference := Vector3.{0, 1, 0};
+                    if abs(n.y) > 0.999 reference = .{1, 0, 0};
+                    t := normalize(cross(reference, n));
+                    tangents[i] = .{t.x, t.y, t.z, 1};
+                }
+                pbr_gltf_log("    Generated % fallback tangents", tangents.count);
             }
 
             base_color_container: s32 = -1;
@@ -363,7 +432,6 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             alpha_mode := Gltf_Alpha_Mode.OPAQUE;
             alpha_cutoff := 0.5;
 
-            mat := get_gltf_material(gltf, prim.material_index);
             if mat != null {
                 pbr_gltf_log("    Material: '%'", mat.name);
                 pbr_gltf_log("      base_color_texture.texture_index = %", mat.pbr_metallic_roughness.base_color_texture.texture_index);
@@ -427,20 +495,30 @@ load_gltf_into_pbr_packed_texture_renderables :: (
             renderable.positions = positions;
             renderable.normals = normals;
             renderable.tangents = tangents;
-            renderable.texture_coordinates = texture_coordinates;
 
             vertex_count := positions.count;
 
+            array_resize(*renderable.texture_coordinates_0, vertex_count);
+            array_resize(*renderable.texture_coordinates_1, vertex_count);
+            for i: 0..vertex_count - 1 {
+                base_uv := base_color_texture_coordinates[i];
+                normal_uv := normal_texture_coordinates[i];
+                mr_uv := metallic_roughness_texture_coordinates[i];
+                ao_uv := ambient_occlusion_texture_coordinates[i];
+                renderable.texture_coordinates_0[i] = .{base_uv.x, base_uv.y, normal_uv.x, normal_uv.y};
+                renderable.texture_coordinates_1[i] = .{mr_uv.x, mr_uv.y, ao_uv.x, ao_uv.y};
+            }
+            array_free(base_color_texture_coordinates);
+            array_free(normal_texture_coordinates);
+            array_free(metallic_roughness_texture_coordinates);
+            array_free(ambient_occlusion_texture_coordinates);
+
             pbr_gltf_log("    Filling renderable: % vertices, % indices", vertex_count, indices.count);
 
-            array_resize(*renderable.packed_texture_index_for_base_color, vertex_count);
-            array_resize(*renderable.packed_texture_bounding_box_index_for_base_color, vertex_count);
-            array_resize(*renderable.packed_texture_index_for_normal, vertex_count);
-            array_resize(*renderable.packed_texture_bounding_box_index_for_normal, vertex_count);
-            array_resize(*renderable.packed_texture_index_for_metallic_roughness, vertex_count);
-            array_resize(*renderable.packed_texture_bounding_box_index_for_metallic_roughness, vertex_count);
-            array_resize(*renderable.packed_texture_index_for_ambient_occlusion, vertex_count);
-            array_resize(*renderable.packed_texture_bounding_box_index_for_ambient_occlusion, vertex_count);
+            array_resize(*renderable.base_color_texture_bindings, vertex_count);
+            array_resize(*renderable.normal_texture_bindings, vertex_count);
+            array_resize(*renderable.metallic_roughness_texture_bindings, vertex_count);
+            array_resize(*renderable.ambient_occlusion_texture_bindings, vertex_count);
             array_resize(*renderable.base_color_factors, vertex_count);
             array_resize(*renderable.material_parameters, vertex_count);
             array_resize(*renderable.glass_parameters, vertex_count);
@@ -458,33 +536,29 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 renderable.volume_parameters[i] = volume_parameters;
                 renderable.alpha_parameters[i] = .{alpha_mode_for_shader, alpha_cutoff};
 
-                renderable.packed_texture_index_for_base_color[i] = base_color_container;
-                renderable.packed_texture_bounding_box_index_for_base_color[i] = base_color_meta;
-
-                renderable.packed_texture_index_for_normal[i] = normal_container;
-                renderable.packed_texture_bounding_box_index_for_normal[i] = normal_meta;
-
-                renderable.packed_texture_index_for_metallic_roughness[i] = mr_container;
-                renderable.packed_texture_bounding_box_index_for_metallic_roughness[i] = mr_meta;
-
-                renderable.packed_texture_index_for_ambient_occlusion[i] = ao_container;
-                renderable.packed_texture_bounding_box_index_for_ambient_occlusion[i] = ao_meta;
+                renderable.base_color_texture_bindings[i] = .[base_color_container, base_color_meta];
+                renderable.normal_texture_bindings[i] = .[normal_container, normal_meta];
+                renderable.metallic_roughness_texture_bindings[i] = .[mr_container, mr_meta];
+                renderable.ambient_occlusion_texture_bindings[i] = .[ao_container, ao_meta];
             }
 
             pbr_gltf_log("    Pre-buffer check:");
             pbr_gltf_log("      renderable.positions.count = %", renderable.positions.count);
             pbr_gltf_log("      renderable.normals.count = %", renderable.normals.count);
             pbr_gltf_log("      renderable.tangents.count = %", renderable.tangents.count);
-            pbr_gltf_log("      renderable.texture_coordinates.count = %", renderable.texture_coordinates.count);
+            pbr_gltf_log("      renderable.texture_coordinates_0.count = %", renderable.texture_coordinates_0.count);
+            pbr_gltf_log("      renderable.texture_coordinates_1.count = %", renderable.texture_coordinates_1.count);
             pbr_gltf_log("      renderable.indices.count = %", renderable.indices.count);
-            pbr_gltf_log("      renderable.packed_texture_index_for_base_color.count = %", renderable.packed_texture_index_for_base_color.count);
+            pbr_gltf_log("      renderable.base_color_texture_bindings.count = %", renderable.base_color_texture_bindings.count);
 
             if renderable.positions.count != renderable.normals.count
                 pbr_gltf_log("      ERROR: positions.count != normals.count");
             if renderable.positions.count != renderable.tangents.count
                 pbr_gltf_log("      ERROR: positions.count != tangents.count");
-            if renderable.positions.count != renderable.texture_coordinates.count
-                pbr_gltf_log("      ERROR: positions.count != texture_coordinates.count");
+            if renderable.positions.count != renderable.texture_coordinates_0.count
+                pbr_gltf_log("      ERROR: positions.count != texture_coordinates_0.count");
+            if renderable.positions.count != renderable.texture_coordinates_1.count
+                pbr_gltf_log("      ERROR: positions.count != texture_coordinates_1.count");
 
             local_to_world := mt.world_transform;
 
