@@ -63,11 +63,73 @@ Transparent_PBR_Renderable :: struct {
     sort_position: Vector3;
 }
 
+/*
+Complete CPU representation of one PBR primitive. It deliberately contains no
+renderer indices, OpenGL handles, or backend state, so glTF jobs can construct
+it away from the graphics thread.
+*/
+PBR_Packed_Texture_Primitive :: struct {
+    indices: [..] u32;
+    positions: [..] Vector3;
+    normals: [..] Vector3;
+    tangents: [..] Vector4;
+    texture_coordinates_0: [..] Vector4;
+    texture_coordinates_1: [..] Vector4;
+    base_color_factors: [..] Vector4;
+    material_parameters: [..] Vector4;
+    glass_parameters: [..] Vector4;
+    volume_parameters: [..] Vector4;
+    alpha_parameters: [..] Vector2;
+    base_color_texture_bindings: [..] [2] s32;
+    normal_texture_bindings: [..] [2] s32;
+    metallic_roughness_texture_bindings: [..] [2] s32;
+    ambient_occlusion_texture_bindings: [..] [2] s32;
+
+    local_to_model: Matrix4 = Matrix4_Identity;
+    local_center: Vector3;
+    local_bounds_min: Vector3;
+    local_bounds_max: Vector3;
+    has_local_bounds: bool;
+    is_transparent: bool;
+}
+
+PBR_Packed_Texture_Model :: struct {
+    primitives: [..] PBR_Packed_Texture_Primitive;
+}
+
+deinit :: (primitive: *PBR_Packed_Texture_Primitive) {
+    array_free(primitive.indices);
+    array_free(primitive.positions);
+    array_free(primitive.normals);
+    array_free(primitive.tangents);
+    array_free(primitive.texture_coordinates_0);
+    array_free(primitive.texture_coordinates_1);
+    array_free(primitive.base_color_factors);
+    array_free(primitive.material_parameters);
+    array_free(primitive.glass_parameters);
+    array_free(primitive.volume_parameters);
+    array_free(primitive.alpha_parameters);
+    array_free(primitive.base_color_texture_bindings);
+    array_free(primitive.normal_texture_bindings);
+    array_free(primitive.metallic_roughness_texture_bindings);
+    array_free(primitive.ambient_occlusion_texture_bindings);
+    primitive.* = .{};
+}
+
+deinit :: (model: *PBR_Packed_Texture_Model) {
+    for *primitive: model.primitives deinit(primitive);
+    array_free(model.primitives);
+    model.* = .{};
+}
+
 PBR_Model_Renderable :: struct {
     is_transparent: bool;
     index: int;
     local_to_model: Matrix4;
     local_center: Vector3;
+    local_bounds_min: Vector3;
+    local_bounds_max: Vector3;
+    has_local_bounds: bool;
 }
 
 PBR_Model_Instance :: struct {

@@ -214,18 +214,17 @@ load_gltf_lights :: (pbr: *PBR_Packed_Texture_Rendering, gltf: *Gltf_Data) {
 
 // endfold node transform helpers
 
-load_gltf_into_pbr_packed_texture_renderables :: (
+load_gltf_pbr_packed_texture_model :: (
     gltf: *Gltf_Data,
     metadata: *Packed_Textures_Metadata,
-    renderer: *Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderer,
-    opaque_renderables: *[..] Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable,
-    transparent_renderables: *[..] Transparent_PBR_Renderable,
-    loaded_model: *PBR_Model_Instance = null
-) {
+) -> PBR_Packed_Texture_Model {
+    result: PBR_Packed_Texture_Model;
 
     lookup_table := build_packed_texture_lookup_table(metadata);
+    defer deinit(*lookup_table);
 
     mesh_transforms := collect_mesh_transforms(gltf);
+    defer array_free(mesh_transforms);
 
     pbr_gltf_log("=== BEGIN loading glTF into PBR renderables ===");
     pbr_gltf_log("glTF has % meshes, % materials, % textures, % images",
@@ -288,7 +287,7 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 }
             }
 
-            renderable: Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable;
+            model_primitive: PBR_Packed_Texture_Primitive;
 
             positions := read_accessor_as_vector3_array(gltf, prim.position_accessor);
             pbr_gltf_log("    Read % positions", positions.count);
@@ -400,6 +399,7 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 for tangents_vec4 {
                     array_add(*tangents, it);
                 }
+                array_free(tangents_vec4);
             } else {
                 /*
                 without a normal texture, the shader's flat tangent-space
@@ -491,22 +491,22 @@ load_gltf_into_pbr_packed_texture_renderables :: (
                 pbr_gltf_log("    No material for this primitive");
             }
 
-            renderable.indices = indices;
-            renderable.positions = positions;
-            renderable.normals = normals;
-            renderable.tangents = tangents;
+            model_primitive.indices = indices;
+            model_primitive.positions = positions;
+            model_primitive.normals = normals;
+            model_primitive.tangents = tangents;
 
             vertex_count := positions.count;
 
-            array_resize(*renderable.texture_coordinates_0, vertex_count);
-            array_resize(*renderable.texture_coordinates_1, vertex_count);
+            array_resize(*model_primitive.texture_coordinates_0, vertex_count);
+            array_resize(*model_primitive.texture_coordinates_1, vertex_count);
             for i: 0..vertex_count - 1 {
                 base_uv := base_color_texture_coordinates[i];
                 normal_uv := normal_texture_coordinates[i];
                 mr_uv := metallic_roughness_texture_coordinates[i];
                 ao_uv := ambient_occlusion_texture_coordinates[i];
-                renderable.texture_coordinates_0[i] = .{base_uv.x, base_uv.y, normal_uv.x, normal_uv.y};
-                renderable.texture_coordinates_1[i] = .{mr_uv.x, mr_uv.y, ao_uv.x, ao_uv.y};
+                model_primitive.texture_coordinates_0[i] = .{base_uv.x, base_uv.y, normal_uv.x, normal_uv.y};
+                model_primitive.texture_coordinates_1[i] = .{mr_uv.x, mr_uv.y, ao_uv.x, ao_uv.y};
             }
             array_free(base_color_texture_coordinates);
             array_free(normal_texture_coordinates);
@@ -515,103 +515,179 @@ load_gltf_into_pbr_packed_texture_renderables :: (
 
             pbr_gltf_log("    Filling renderable: % vertices, % indices", vertex_count, indices.count);
 
-            array_resize(*renderable.base_color_texture_bindings, vertex_count);
-            array_resize(*renderable.normal_texture_bindings, vertex_count);
-            array_resize(*renderable.metallic_roughness_texture_bindings, vertex_count);
-            array_resize(*renderable.ambient_occlusion_texture_bindings, vertex_count);
-            array_resize(*renderable.base_color_factors, vertex_count);
-            array_resize(*renderable.material_parameters, vertex_count);
-            array_resize(*renderable.glass_parameters, vertex_count);
-            array_resize(*renderable.volume_parameters, vertex_count);
-            array_resize(*renderable.alpha_parameters, vertex_count);
+            array_resize(*model_primitive.base_color_texture_bindings, vertex_count);
+            array_resize(*model_primitive.normal_texture_bindings, vertex_count);
+            array_resize(*model_primitive.metallic_roughness_texture_bindings, vertex_count);
+            array_resize(*model_primitive.ambient_occlusion_texture_bindings, vertex_count);
+            array_resize(*model_primitive.base_color_factors, vertex_count);
+            array_resize(*model_primitive.material_parameters, vertex_count);
+            array_resize(*model_primitive.glass_parameters, vertex_count);
+            array_resize(*model_primitive.volume_parameters, vertex_count);
+            array_resize(*model_primitive.alpha_parameters, vertex_count);
 
             alpha_mode_for_shader := PBR_ALPHA_MODE_OPAQUE;
             if alpha_mode == .MASK  alpha_mode_for_shader = PBR_ALPHA_MODE_MASK;
             if alpha_mode == .BLEND alpha_mode_for_shader = PBR_ALPHA_MODE_BLEND;
 
             for i: 0..vertex_count - 1 {
-                renderable.base_color_factors[i] = base_color_factor;
-                renderable.material_parameters[i] = material_parameters;
-                renderable.glass_parameters[i] = glass_parameters;
-                renderable.volume_parameters[i] = volume_parameters;
-                renderable.alpha_parameters[i] = .{alpha_mode_for_shader, alpha_cutoff};
+                model_primitive.base_color_factors[i] = base_color_factor;
+                model_primitive.material_parameters[i] = material_parameters;
+                model_primitive.glass_parameters[i] = glass_parameters;
+                model_primitive.volume_parameters[i] = volume_parameters;
+                model_primitive.alpha_parameters[i] = .{alpha_mode_for_shader, alpha_cutoff};
 
-                renderable.base_color_texture_bindings[i] = .[base_color_container, base_color_meta];
-                renderable.normal_texture_bindings[i] = .[normal_container, normal_meta];
-                renderable.metallic_roughness_texture_bindings[i] = .[mr_container, mr_meta];
-                renderable.ambient_occlusion_texture_bindings[i] = .[ao_container, ao_meta];
+                model_primitive.base_color_texture_bindings[i] = .[base_color_container, base_color_meta];
+                model_primitive.normal_texture_bindings[i] = .[normal_container, normal_meta];
+                model_primitive.metallic_roughness_texture_bindings[i] = .[mr_container, mr_meta];
+                model_primitive.ambient_occlusion_texture_bindings[i] = .[ao_container, ao_meta];
             }
 
             pbr_gltf_log("    Pre-buffer check:");
-            pbr_gltf_log("      renderable.positions.count = %", renderable.positions.count);
-            pbr_gltf_log("      renderable.normals.count = %", renderable.normals.count);
-            pbr_gltf_log("      renderable.tangents.count = %", renderable.tangents.count);
-            pbr_gltf_log("      renderable.texture_coordinates_0.count = %", renderable.texture_coordinates_0.count);
-            pbr_gltf_log("      renderable.texture_coordinates_1.count = %", renderable.texture_coordinates_1.count);
-            pbr_gltf_log("      renderable.indices.count = %", renderable.indices.count);
-            pbr_gltf_log("      renderable.base_color_texture_bindings.count = %", renderable.base_color_texture_bindings.count);
+            pbr_gltf_log("      model_primitive.positions.count = %", model_primitive.positions.count);
+            pbr_gltf_log("      model_primitive.normals.count = %", model_primitive.normals.count);
+            pbr_gltf_log("      model_primitive.tangents.count = %", model_primitive.tangents.count);
+            pbr_gltf_log("      model_primitive.texture_coordinates_0.count = %", model_primitive.texture_coordinates_0.count);
+            pbr_gltf_log("      model_primitive.texture_coordinates_1.count = %", model_primitive.texture_coordinates_1.count);
+            pbr_gltf_log("      model_primitive.indices.count = %", model_primitive.indices.count);
+            pbr_gltf_log("      model_primitive.base_color_texture_bindings.count = %", model_primitive.base_color_texture_bindings.count);
 
-            if renderable.positions.count != renderable.normals.count
+            if model_primitive.positions.count != model_primitive.normals.count
                 pbr_gltf_log("      ERROR: positions.count != normals.count");
-            if renderable.positions.count != renderable.tangents.count
+            if model_primitive.positions.count != model_primitive.tangents.count
                 pbr_gltf_log("      ERROR: positions.count != tangents.count");
-            if renderable.positions.count != renderable.texture_coordinates_0.count
+            if model_primitive.positions.count != model_primitive.texture_coordinates_0.count
                 pbr_gltf_log("      ERROR: positions.count != texture_coordinates_0.count");
-            if renderable.positions.count != renderable.texture_coordinates_1.count
+            if model_primitive.positions.count != model_primitive.texture_coordinates_1.count
                 pbr_gltf_log("      ERROR: positions.count != texture_coordinates_1.count");
 
-            local_to_world := mt.world_transform;
+            model_primitive.local_to_model = mt.world_transform;
+            model_primitive.local_center = compute_center(model_primitive.positions);
+            model_primitive.is_transparent = alpha_mode == .BLEND || glass_parameters.x > 0.0;
 
-            success := buffer_object(renderer, *renderable);
-            if !success {
-                log_error("    FAILED to buffer PBR primitive from mesh '%'", mesh.name);
-            } else {
-                pbr_gltf_log("    Buffered OK: object_index=%, local_to_world_index=%",
-                    renderable.object_index, renderable.local_to_world_index);
-
-                set_local_to_world_matrix(renderer, renderable, local_to_world);
-
-            }
-
-            local_center := compute_center(renderable.positions);
-            if alpha_mode == .BLEND || glass_parameters.x > 0.0 {
-                local_center := compute_center(renderable.positions);
-                sort_position := transform_point(local_to_world, local_center);
-                model_index := transparent_renderables.count;
-                array_add(transparent_renderables, .{
-                    renderable = renderable,
-                    sort_position = sort_position,
-                });
-
-                if loaded_model {
-                    array_add(*loaded_model.renderables, .{
-                        is_transparent = true,
-                        index = model_index,
-                        local_to_model = local_to_world,
-                        local_center = local_center,
-                    });
-                }
-            } else {
-                model_index := opaque_renderables.count;
-                array_add(opaque_renderables, renderable);
-                if loaded_model {
-                    array_add(*loaded_model.renderables, .{
-                        is_transparent = false,
-                        index = model_index,
-                        local_to_model = local_to_world,
-                        local_center = local_center,
-                    });
+            for position: model_primitive.positions {
+                if !model_primitive.has_local_bounds {
+                    model_primitive.local_bounds_min = position;
+                    model_primitive.local_bounds_max = position;
+                    model_primitive.has_local_bounds = true;
+                } else {
+                    model_primitive.local_bounds_min.x = min(model_primitive.local_bounds_min.x, position.x);
+                    model_primitive.local_bounds_min.y = min(model_primitive.local_bounds_min.y, position.y);
+                    model_primitive.local_bounds_min.z = min(model_primitive.local_bounds_min.z, position.z);
+                    model_primitive.local_bounds_max.x = max(model_primitive.local_bounds_max.x, position.x);
+                    model_primitive.local_bounds_max.y = max(model_primitive.local_bounds_max.y, position.y);
+                    model_primitive.local_bounds_max.z = max(model_primitive.local_bounds_max.z, position.z);
                 }
             }
+
+            array_add(*result.primitives, model_primitive);
         }
     }
 
-    pbr_gltf_log("\n=== DONE: loaded % opaque and % transparent renderables ===", opaque_renderables.count, transparent_renderables.count);
+    pbr_gltf_log("\n=== DONE: prepared % CPU renderables ===", result.primitives.count);
+    return result;
+}
+
+pbr_forget_moved_array :: (array: *[..] $T) {
+    array.data = null;
+    array.count = 0;
+    array.allocated = 0;
+}
+
+move_pbr_primitive_into_opengl_renderable :: (
+    source: *PBR_Packed_Texture_Primitive,
+    destination: *Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable,
+) {
+    destination.indices = source.indices;
+    destination.positions = source.positions;
+    destination.normals = source.normals;
+    destination.tangents = source.tangents;
+    destination.texture_coordinates_0 = source.texture_coordinates_0;
+    destination.texture_coordinates_1 = source.texture_coordinates_1;
+    destination.base_color_factors = source.base_color_factors;
+    destination.material_parameters = source.material_parameters;
+    destination.glass_parameters = source.glass_parameters;
+    destination.volume_parameters = source.volume_parameters;
+    destination.alpha_parameters = source.alpha_parameters;
+    destination.base_color_texture_bindings = source.base_color_texture_bindings;
+    destination.normal_texture_bindings = source.normal_texture_bindings;
+    destination.metallic_roughness_texture_bindings = source.metallic_roughness_texture_bindings;
+    destination.ambient_occlusion_texture_bindings = source.ambient_occlusion_texture_bindings;
+
+    pbr_forget_moved_array(*source.indices);
+    pbr_forget_moved_array(*source.positions);
+    pbr_forget_moved_array(*source.normals);
+    pbr_forget_moved_array(*source.tangents);
+    pbr_forget_moved_array(*source.texture_coordinates_0);
+    pbr_forget_moved_array(*source.texture_coordinates_1);
+    pbr_forget_moved_array(*source.base_color_factors);
+    pbr_forget_moved_array(*source.material_parameters);
+    pbr_forget_moved_array(*source.glass_parameters);
+    pbr_forget_moved_array(*source.volume_parameters);
+    pbr_forget_moved_array(*source.alpha_parameters);
+    pbr_forget_moved_array(*source.base_color_texture_bindings);
+    pbr_forget_moved_array(*source.normal_texture_bindings);
+    pbr_forget_moved_array(*source.metallic_roughness_texture_bindings);
+    pbr_forget_moved_array(*source.ambient_occlusion_texture_bindings);
+}
+
+install_pbr_packed_texture_model_opengl :: (
+    model: *PBR_Packed_Texture_Model,
+    renderer: *Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderer,
+    opaque_renderables: *[..] Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable,
+    transparent_renderables: *[..] Transparent_PBR_Renderable,
+    loaded_model: *PBR_Model_Instance = null,
+    queued_operations: *GL_Operation_Queue = null,
+) -> int {
+    installed_count := 0;
+    for *primitive: model.primitives {
+        renderable: Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable;
+        move_pbr_primitive_into_opengl_renderable(primitive, *renderable);
+
+        if !buffer_object(renderer, *renderable, queued_operations) {
+            log_error("Failed to allocate renderer storage for a PBR primitive");
+            deinit(*renderable);
+            continue;
+        }
+        set_local_to_world_matrix(renderer, renderable, primitive.local_to_model);
+
+        renderable_index: int;
+        if primitive.is_transparent {
+            renderable_index = transparent_renderables.count;
+            array_add(transparent_renderables, .{
+                renderable = renderable,
+                sort_position = transform_point(primitive.local_to_model, primitive.local_center),
+            });
+        } else {
+            renderable_index = opaque_renderables.count;
+            array_add(opaque_renderables, renderable);
+        }
+
+        if loaded_model {
+            array_add(*loaded_model.renderables, .{
+                is_transparent = primitive.is_transparent,
+                index = renderable_index,
+                local_to_model = primitive.local_to_model,
+                local_center = primitive.local_center,
+                local_bounds_min = primitive.local_bounds_min,
+                local_bounds_max = primitive.local_bounds_max,
+                has_local_bounds = primitive.has_local_bounds,
+            });
+        }
+        installed_count += 1;
+    }
+    return installed_count;
 }
 
 load_gltf_model :: (using ptr: *PBR_Packed_Texture_Rendering, gltf_path: string) {
     gltf := load_gltf(gltf_path);
     defer deinit(*gltf);
     load_gltf_lights(ptr, *gltf);
-    load_gltf_into_pbr_packed_texture_renderables(*gltf, *metadata, *renderer, *opaque_renderables, *transparent_renderables);
+    model := load_gltf_pbr_packed_texture_model(*gltf, *metadata);
+    defer deinit(*model);
+    install_pbr_packed_texture_model_opengl(
+        *model,
+        *renderer,
+        *opaque_renderables,
+        *transparent_renderables,
+    );
 }
