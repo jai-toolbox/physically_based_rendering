@@ -636,14 +636,14 @@ install_pbr_packed_texture_model_opengl :: (
     opaque_renderables: *[..] Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable,
     transparent_renderables: *[..] Transparent_PBR_Renderable,
     loaded_model: *PBR_Model_Instance = null,
-    queued_operations: *GL_Operation_Queue = null,
+    budgeter: *GL_Budgeter = null,
 ) -> int {
     installed_count := 0;
     for *primitive: model.primitives {
         renderable: Camera_Per_Object_Transform_Pbr_Packed_Texture_Renderable;
         move_pbr_primitive_into_opengl_renderable(primitive, *renderable);
 
-        if !buffer_object(renderer, *renderable, queued_operations) {
+        if !buffer_object(renderer, *renderable, budgeter) {
             log_error("Failed to allocate renderer storage for a PBR primitive");
             deinit(*renderable);
             continue;
