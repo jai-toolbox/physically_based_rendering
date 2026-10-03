@@ -13,7 +13,7 @@ find_pbr_texture :: (
     lookup_table: *Table(string, Packed_Texture_Lookup),
     path: string,
     channel_name: string
-) -> container_index: s32, metadata_index: s32 {
+) -> page_index: s32, metadata_index: s32 {
     if path.count == 0 {
         pbr_gltf_log("  PBR channel '%': no path, using shader default", channel_name);
         return -1, -1;
@@ -25,9 +25,9 @@ find_pbr_texture :: (
         return -1, -1;
     }
 
-    pbr_gltf_log("  PBR channel '%': '%' -> container=%, metadata=%",
-        channel_name, path, result.container_index, result.metadata_index);
-    return result.container_index, result.metadata_index;
+    pbr_gltf_log("  PBR channel '%': '%' -> page=%, metadata=%",
+        channel_name, path, result.page_index, result.metadata_index);
+    return result.page_index, result.metadata_index;
 }
 
 read_transformed_texture_coordinates :: (
