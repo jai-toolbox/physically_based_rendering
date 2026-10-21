@@ -97,7 +97,7 @@ PACKED_TEXTURE_VERTICAL_UV_FLIP_EXPERIMENT :: true;
 
 remap_uv_to_packed_space :: (
     tc: Vector2,
-    metadata: *Packed_Textures_Metadata,
+    metadata: *Packed_Texture_Layout,
     metadata_index: s32
 ) -> Vector2 {
     if metadata_index < 0 return tc;

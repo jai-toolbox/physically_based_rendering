@@ -216,7 +216,7 @@ load_gltf_lights :: (pbr: *PBR_Packed_Texture_Rendering, gltf: *Gltf_Data) {
 
 load_gltf_pbr_packed_texture_model :: (
     gltf: *Gltf_Data,
-    metadata: *Packed_Textures_Metadata,
+    metadata: *Packed_Texture_Layout,
 ) -> PBR_Packed_Texture_Model {
     result: PBR_Packed_Texture_Model;
 
