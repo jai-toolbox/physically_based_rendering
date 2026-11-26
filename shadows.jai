@@ -1,7 +1,7 @@
 make_directional_light_view_matrix :: (direction: Vector3, center: Vector3, distance_from_center: float) -> Matrix4 {
     forward := normalize(direction);
-    up_reference := Vector3.{0, 1, 0};
-    if abs(dot(forward, up_reference)) > 0.95 up_reference = .{0, 0, 1};
+    up_reference := WORLD_UP;
+    if abs(dot(forward, up_reference)) > 0.95 up_reference = WORLD_FORWARD;
 
     right := normalize(cross(forward, up_reference));
     up := cross(right, forward);

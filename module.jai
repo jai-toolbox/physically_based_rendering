@@ -10,6 +10,7 @@
 #import "tbx/model_loading";
 #import "tbx/assets";
 #import "tbx/geometry";
+#import "tbx/math";
 #import "tbx/lighting";
 
 #load "core.jai";
